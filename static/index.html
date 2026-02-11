@@ -135,6 +135,7 @@
 
   <script>
     let ticketsPerDayChart, topCategoriesChart;
+    const CSV_URL = '/data/tickets.csv';
 
     function showError(msg) {
       const box = document.getElementById('errorBox');
@@ -142,10 +143,75 @@
       box.style.display = msg ? 'block' : 'none';
     }
 
+    function parseCSV(text) {
+      const lines = text.trim().split(/\r?\n/);
+      if (lines.length < 2) return [];
+      const rows = lines.slice(1).map(line => {
+        const parts = [];
+        let cur = '', inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+          const c = line[i];
+          if (c === '"') inQuotes = !inQuotes;
+          else if ((c === ',' && !inQuotes) || (c === '\r' && !inQuotes)) { parts.push(cur); cur = ''; }
+          else if (c !== '\r') cur += c;
+        }
+        parts.push(cur);
+        return parts;
+      });
+      return rows;
+    }
+
+    function computeSummaryFromRows(rows) {
+      const dateFmt = d => d.toISOString().slice(0, 10);
+      const dayMap = {};
+      const catMap = {};
+      const catHours = {};
+      let open = 0, closed = 0;
+      for (const row of rows) {
+        if (row.length < 6) continue;
+        const createdStr = row[1];
+        const closedStr = row[2];
+        const category = row[3];
+        const createdAt = new Date(createdStr + 'T00:00:00Z');
+        if (isNaN(createdAt.getTime())) continue;
+        const day = dateFmt(createdAt);
+        dayMap[day] = (dayMap[day] || 0) + 1;
+        catMap[category] = (catMap[category] || 0) + 1;
+        if (closedStr) {
+          closed++;
+          const closedAt = new Date(closedStr + 'T00:00:00Z');
+          if (!isNaN(closedAt.getTime())) {
+            const hours = (closedAt - createdAt) / (1000 * 60 * 60);
+            if (!catHours[category]) catHours[category] = [];
+            catHours[category].push(hours);
+          }
+        } else {
+          open++;
+        }
+      }
+      const ticketsPerDay = Object.entries(dayMap).map(([date, count]) => ({ date, count })).sort((a, b) => a.date.localeCompare(b.date));
+      const topCategories = Object.entries(catMap).map(([category, count]) => ({ category, count })).sort((a, b) => b.count - a.count);
+      const avgByCat = Object.entries(catHours).map(([category, hours]) => ({
+        category,
+        avg_hours: hours.reduce((s, h) => s + h, 0) / hours.length
+      })).sort((a, b) => a.category.localeCompare(b.category));
+      return {
+        tickets_per_day: ticketsPerDay,
+        top_categories: topCategories,
+        avg_resolution_hours_by_category: avgByCat,
+        open_vs_closed: { open, closed },
+        total_tickets: rows.filter(r => r.length >= 6).length,
+        open_tickets: open,
+        closed_tickets: closed
+      };
+    }
+
     async function fetchSummary() {
-      const res = await fetch('/api/summary');
-      if (!res.ok) throw new Error('Failed to fetch summary');
-      return res.json();
+      const res = await fetch(CSV_URL);
+      if (!res.ok) throw new Error('Failed to fetch CSV');
+      const text = await res.text();
+      const rows = parseCSV(text);
+      return computeSummaryFromRows(rows);
     }
 
     function render(data) {
@@ -234,9 +300,7 @@
       btn.disabled = true;
       try {
         showError('');
-        const res = await fetch('/api/reload', { method: 'POST' });
-        if (!res.ok) throw new Error('Reload failed');
-        const data = await res.json();
+        const data = await fetchSummary();
         render(data);
       } catch (e) {
         showError('Reload failed: ' + e.message);
