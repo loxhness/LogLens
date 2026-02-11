@@ -77,7 +77,10 @@
     }
     .btn:hover { background: #2ea043; }
     .btn:disabled { background: #21262d; color: #8b949e; cursor: not-allowed; }
-    .toolbar { margin-bottom: 1.5rem; display: flex; justify-content: flex-end; }
+    .toolbar { margin-bottom: 1.5rem; display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end; }
+    .btn-outline { background: transparent; border: 1px solid #30363d; color: #c9d1d9; }
+    .btn-outline:hover { background: #21262d; border-color: #8b949e; }
+    input[type="file"] { display: none; }
     .error { color: #f85149; background: rgba(248,81,73,0.15); padding: 0.75rem; border-radius: 6px; margin-bottom: 1rem; }
     @media (max-width: 768px) {
       .kpi-grid { grid-template-columns: 1fr; }
@@ -91,7 +94,10 @@
     <p class="subtitle">IT Ticket Dashboard — local CSV analytics</p>
 
     <div class="toolbar">
-      <button class="btn" id="reloadBtn" onclick="reloadAndRefresh()">Reload CSV</button>
+      <button class="btn btn-outline" onclick="downloadCSV()">Download CSV</button>
+      <label class="btn btn-outline" for="uploadCsvInput">Upload CSV</label>
+      <input type="file" id="uploadCsvInput" accept=".csv,text/csv" onchange="uploadCSV(event)">
+      <button class="btn" id="reloadBtn" onclick="reloadAndRefresh()">Reload from server</button>
     </div>
 
     <div id="errorBox" class="error" style="display:none;"></div>
@@ -136,6 +142,8 @@
   <script>
     let ticketsPerDayChart, topCategoriesChart;
     const CSV_URL = '/data/tickets.csv';
+    const STORAGE_KEY = 'loglens-csv';
+    let currentCsvText = null;
 
     function showError(msg) {
       const box = document.getElementById('errorBox');
@@ -206,12 +214,68 @@
       };
     }
 
+    function getSummaryFromCSVText(text) {
+      const rows = parseCSV(text);
+      return computeSummaryFromRows(rows);
+    }
+
     async function fetchSummary() {
+      if (currentCsvText !== null) {
+        return getSummaryFromCSVText(currentCsvText);
+      }
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        currentCsvText = saved;
+        return getSummaryFromCSVText(saved);
+      }
       const res = await fetch(CSV_URL);
       if (!res.ok) throw new Error('Failed to fetch CSV');
       const text = await res.text();
+      currentCsvText = text;
       const rows = parseCSV(text);
       return computeSummaryFromRows(rows);
+    }
+
+    function downloadCSV() {
+      const csv = currentCsvText;
+      if (csv) {
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'tickets.csv';
+        a.click();
+        URL.revokeObjectURL(a.href);
+        return;
+      }
+      fetch(CSV_URL).then(r => r.text()).then(text => {
+        currentCsvText = text;
+        const blob = new Blob([text], { type: 'text/csv' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'tickets.csv';
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }).catch(e => showError('Download failed: ' + e.message));
+    }
+
+    function uploadCSV(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function () {
+        try {
+          const text = reader.result;
+          const summary = getSummaryFromCSVText(text);
+          currentCsvText = text;
+          localStorage.setItem(STORAGE_KEY, text);
+          showError('');
+          render(summary);
+        } catch (e) {
+          showError('Invalid CSV: ' + e.message);
+        }
+      };
+      reader.readAsText(file);
+      event.target.value = '';
     }
 
     function render(data) {
@@ -300,7 +364,13 @@
       btn.disabled = true;
       try {
         showError('');
-        const data = await fetchSummary();
+        currentCsvText = null;
+        localStorage.removeItem(STORAGE_KEY);
+        const res = await fetch(CSV_URL);
+        if (!res.ok) throw new Error('Failed to fetch CSV');
+        const text = await res.text();
+        currentCsvText = text;
+        const data = getSummaryFromCSVText(text);
         render(data);
       } catch (e) {
         showError('Reload failed: ' + e.message);
