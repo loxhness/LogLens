@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LogLens — IT Ticket Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0f1419;
+      color: #e6edf3;
+      min-height: 100vh;
+      padding: 1.5rem;
+    }
+    .container { max-width: 1100px; margin: 0 auto; }
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+      color: #58a6ff;
+    }
+    .subtitle { color: #8b949e; font-size: 0.9rem; margin-bottom: 1.5rem; }
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+    .kpi-card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 1.25rem;
+    }
+    .kpi-card .label { color: #8b949e; font-size: 0.85rem; margin-bottom: 0.25rem; }
+    .kpi-card .value { font-size: 1.75rem; font-weight: 700; }
+    .kpi-card.total .value { color: #58a6ff; }
+    .kpi-card.open .value { color: #f0883e; }
+    .kpi-card.closed .value { color: #3fb950; }
+    .charts-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+      margin-bottom: 2rem;
+    }
+    .chart-card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 1.25rem;
+      min-height: 280px;
+    }
+    .chart-card h3 { font-size: 1rem; margin-bottom: 1rem; color: #c9d1d9; }
+    .table-card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+    .table-card h3 { font-size: 1rem; margin-bottom: 1rem; color: #c9d1d9; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 0.6rem 0.75rem; text-align: left; border-bottom: 1px solid #30363d; }
+    th { color: #8b949e; font-weight: 600; font-size: 0.85rem; }
+    td { font-size: 0.95rem; }
+    .btn {
+      background: #238636;
+      color: #fff;
+      border: none;
+      padding: 0.6rem 1.2rem;
+      border-radius: 6px;
+      font-size: 0.95rem;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    .btn:hover { background: #2ea043; }
+    .btn:disabled { background: #21262d; color: #8b949e; cursor: not-allowed; }
+    .toolbar { margin-bottom: 1.5rem; display: flex; justify-content: flex-end; }
+    .error { color: #f85149; background: rgba(248,81,73,0.15); padding: 0.75rem; border-radius: 6px; margin-bottom: 1rem; }
+    @media (max-width: 768px) {
+      .kpi-grid { grid-template-columns: 1fr; }
+      .charts-row { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>LogLens</h1>
+    <p class="subtitle">IT Ticket Dashboard — local CSV analytics</p>
+
+    <div class="toolbar">
+      <button class="btn" id="reloadBtn" onclick="reloadAndRefresh()">Reload CSV</button>
+    </div>
+
+    <div id="errorBox" class="error" style="display:none;"></div>
+
+    <div class="kpi-grid">
+      <div class="kpi-card total">
+        <div class="label">Total Tickets</div>
+        <div class="value" id="totalTickets">—</div>
+      </div>
+      <div class="kpi-card open">
+        <div class="label">Open</div>
+        <div class="value" id="openTickets">—</div>
+      </div>
+      <div class="kpi-card closed">
+        <div class="label">Closed</div>
+        <div class="value" id="closedTickets">—</div>
+      </div>
+    </div>
+
+    <div class="charts-row">
+      <div class="chart-card">
+        <h3>Tickets per Day</h3>
+        <canvas id="ticketsPerDayChart"></canvas>
+      </div>
+      <div class="chart-card">
+        <h3>Top Categories</h3>
+        <canvas id="topCategoriesChart"></canvas>
+      </div>
+    </div>
+
+    <div class="table-card">
+      <h3>Avg Resolution Hours by Category</h3>
+      <table>
+        <thead>
+          <tr><th>Category</th><th>Avg Hours</th></tr>
+        </thead>
+        <tbody id="avgTable"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    let ticketsPerDayChart, topCategoriesChart;
+
+    function showError(msg) {
+      const box = document.getElementById('errorBox');
+      box.textContent = msg;
+      box.style.display = msg ? 'block' : 'none';
+    }
+
+    async function fetchSummary() {
+      const res = await fetch('/api/summary');
+      if (!res.ok) throw new Error('Failed to fetch summary');
+      return res.json();
+    }
+
+    function render(data) {
+      document.getElementById('totalTickets').textContent = data.total_tickets;
+      document.getElementById('openTickets').textContent = data.open_tickets;
+      document.getElementById('closedTickets').textContent = data.closed_tickets;
+
+      // Line chart: tickets per day
+      const dayLabels = data.tickets_per_day.map(d => d.date);
+      const dayCounts = data.tickets_per_day.map(d => d.count);
+
+      if (ticketsPerDayChart) ticketsPerDayChart.destroy();
+      ticketsPerDayChart = new Chart(document.getElementById('ticketsPerDayChart'), {
+        type: 'line',
+        data: {
+          labels: dayLabels,
+          datasets: [{
+            label: 'Tickets',
+            data: dayCounts,
+            borderColor: '#58a6ff',
+            backgroundColor: 'rgba(88, 166, 255, 0.15)',
+            fill: true,
+            tension: 0.3
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { grid: { color: '#30363d' }, ticks: { color: '#8b949e' } },
+            y: { grid: { color: '#30363d' }, ticks: { color: '#8b949e' } }
+          }
+        }
+      });
+
+      // Bar chart: top categories
+      const catLabels = data.top_categories.map(c => c.category);
+      const catCounts = data.top_categories.map(c => c.count);
+
+      if (topCategoriesChart) topCategoriesChart.destroy();
+      topCategoriesChart = new Chart(document.getElementById('topCategoriesChart'), {
+        type: 'bar',
+        data: {
+          labels: catLabels,
+          datasets: [{
+            label: 'Count',
+            data: catCounts,
+            backgroundColor: 'rgba(63, 185, 80, 0.7)',
+            borderColor: '#3fb950',
+            borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { grid: { color: '#30363d' }, ticks: { color: '#8b949e' } },
+            y: { grid: { color: '#30363d' }, ticks: { color: '#8b949e' } }
+          }
+        }
+      });
+
+      // Table: avg resolution hours
+      const tbody = document.getElementById('avgTable');
+      tbody.innerHTML = data.avg_resolution_hours_by_category.length === 0
+        ? '<tr><td colspan="2">No closed tickets to compute averages</td></tr>'
+        : data.avg_resolution_hours_by_category.map(r =>
+            `<tr><td>${r.category}</td><td>${r.avg_hours.toFixed(2)}</td></tr>`
+          ).join('');
+    }
+
+    async function load() {
+      try {
+        showError('');
+        const data = await fetchSummary();
+        render(data);
+      } catch (e) {
+        showError('Error: ' + e.message);
+      }
+    }
+
+    async function reloadAndRefresh() {
+      const btn = document.getElementById('reloadBtn');
+      btn.disabled = true;
+      try {
+        showError('');
+        const res = await fetch('/api/reload', { method: 'POST' });
+        if (!res.ok) throw new Error('Reload failed');
+        const data = await res.json();
+        render(data);
+      } catch (e) {
+        showError('Reload failed: ' + e.message);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    load();
+  </script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+id,created_at,closed_at,category,priority,status
+1,2026-01-05,2026-01-05,Password Reset,Low,Closed
+2,2026-01-05,2026-01-06,Printer,Medium,Closed
+3,2026-01-06,,Network,High,Open
+4,2026-01-06,2026-01-07,Password Reset,Low,Closed
+5,2026-01-07,2026-01-08,Printer,Medium,Closed
+6,2026-01-07,,Software,High,Open
+7,2026-01-08,2026-01-09,Network,Medium,Closed
+8,2026-01-08,2026-01-08,Password Reset,Low,Closed
+9,2026-01-09,,Hardware,High,Open
+10,2026-01-09,2026-01-10,Printer,Low,Closed
